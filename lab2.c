@@ -31,12 +31,45 @@
 #define curto 3000
 #define emr 5000
 
+#define T1BOTTOM !!!!
+
 volatile unsigned char state=1, state_emr=10, pstate=1, emr_flag=0;
+volatile int time=longo; //NAO É BOA OPÇÃO MAS TEMOS DE DEFINIR ESTE TIME = LONGO EM ALGUM SITIO
 
 ISR(INT0_vect) {
 	emr_flag=1; // indica que se entrou no estado de emergencia
 	state=0; // desliga a maquina de estados normal
 }
+
+/*********************************************
+* Timer 1 ISR is executed each 10ms
+*********************************************/
+
+ISR(TIMER1_OVF_vect) {
+ 	if (time) time-- ;
+	TCNT1 = T1BOTTOM; // reload TC1
+}
+
+/*********************************************
+* Timer 1 initialization in NORMAL mode
+*********************************************/
+
+void tc1_init(void) {
+  TCCR1B = 0;          		// Stop TC1
+  TIFR1 = (7<<TOV1)| (1<<ICF1); // Clear pending intr
+  TCCR1A = 0;          		// Normal Mode 
+  TCNT1 = T1BOTTOM;    		// Load BOTTOM value
+  TIMSK1 = (1<<TOIE1);		// Enable Ovf intrpt
+  TCCR1B = 4;          		// Start TC1 (TP=256)
+}
+/*********************************************
+* Incialização (ATmega)
+	Definir Output
+	Definir Input
+	Interrupt request at falling edge
+	Enables INT0
+	
+*********************************************/
 
 void hw_init(void){
   DDRB = DDRB | 0b00111111; //DEFINIR OUTPUTS
@@ -54,12 +87,12 @@ int main(void) {
 
 	hw_init();
 
-	mili_timer t_long, t_short, t_emr;
+	//mili_timer t_long, t_short, t_emr;
 
 	init_mili_timers();
 
-	start_timer(&t_short, curto);
-	start_timer(&t_long, longo);
+	//start_timer(&t_short, curto);
+	//start_timer(&t_long, longo);
 
 	while (1) {
 
@@ -79,39 +112,50 @@ int main(void) {
 
 
 		// TRANSICOES DA MAQUINA DE ESTADO NORMAL
-		if (get_timer(&t_long) && (1==state)) { // TRANSICAO 1->2 [t_long.q E start_timer(t_short)]
-			start_timer(&t_short, curto);
+		if ((0==time) && (1==state)) { // TRANSICAO 1->2 [t_long.q E start_timer(t_short)]
 			PORTB = (PORTB & ~(1<<GNS)); // DESLIGAR VERDE NORTE-SUL
 			state=2;
 			pstate=2;
+			time=curto;
+			tc1_init();
+			sei();
 		}
 
-		if (get_timer(&t_short) && (2==state)) { // TRANSICAO 2->3 [t_short.q E start_timer(t_short)]
+		if ((0==time) && (2==state)) { // TRANSICAO 2->3 [t_short.q E start_timer(t_short)]
 			PORTB = (PORTB & ~(1<<YNS)); // DESLIGAR AMARELO NORTE-SUL
-			start_timer(&t_short, curto);
 			state=3;
 			pstate=3;
+			time=curto;
+			tc1_init();
+			sei();
 		}
 
-		if (get_timer(&t_short) && (3==state)) { // TRANSICAO 3->4 [t_short.q E start_timer(t_long)]
+		if ((0==time) && (3==state)) { // TRANSICAO 3->4 [t_short.q E start_timer(t_long)]
 			PORTB = (PORTB ^ (1<<REW)); // DESLIGAR VERMELHO ESTE-OESTE
 			start_timer(&t_long, longo);
 			state=4;
 			pstate=4;
+			time=longo;
+			tc1_init();
+			sei();
 		}
 
-		if (get_timer(&t_long) && (4==state)) { // TRANSICAO 4->5 [t_long.q E start_timer(t_short)]
+		if ((0==time) && (4==state)) { // TRANSICAO 4->5 [t_long.q E start_timer(t_short)]
 			PORTB = (PORTB ^ (1<<GEW));  // DESLIGAR VERDE ESTE-OESTE
-			start_timer(&t_short, curto);
 			state=5;
 			pstate=5;
+			time=curto;
+			tc1_init();
+			sei();
 		}
 
-		if (get_timer(&t_short) && (5==state)) { // TRANSICAO 5->6 [t_short.q E start_timer(t_short)]
+		if ((0==time) && (5==state)) { // TRANSICAO 5->6 [t_short.q E start_timer(t_short)]
 			PORTB = (PORTB ^ (1<<YEW)); // DESLIGAR AMARELO ESTE-OESTE
-			start_timer(&t_short, curto);
 			state=6;
 			pstate=6;
+			time=curto;
+			tc1_init();
+			sei();
 		}
 
 		if (get_timer(&t_short) && (6==state)) { // TRANSICAO 6->1 [t_short.q E start_timer(t_long)]
@@ -123,51 +167,67 @@ int main(void) {
 		// Maquina de Emergência
 		// NORTE-SUL
 		if ((1==emr_flag) && ((1==pstate) || (2==pstate)) && (10==state_emr)) { // TRANSICAO 10->11
-			if (1==pstate)
-				start_timer(&t_short, curto); // se vier do verde liga t_short; se vier do amarelo nao liga
+			if (1==pstate) {
+				time=curto;
+				tc1_init();
+				sei(); } // se vier do verde liga t_short; se vier do amarelo nao liga
 			state_emr=11;
 		}
 
-		if ((11==state_emr) && (get_timer(&t_short))) { // TRANSICAO 11->13
-			start_timer(&t_emr, emr);
+		if ((11==state_emr) && (0==time) { // TRANSICAO 11->13
+			time=emr;
+			tc1_init();
+			sei();
 			state_emr=13;
 		}
 
-		if ((13==state_emr) && (get_timer(&t_emr))) { // TRANSICAO 13->10
+		if ((13==state_emr) && (0==time)) { // TRANSICAO 13->10
 			state_emr=10;
 			state=4;
 			pstate=4;
 			emr_flag=0; // transicao de saida do estado de emergencia
-			start_timer(&t_long, longo);
+			time=longo;
+			tc1_init();
+			sei();
 		}
 
 		if ((1==emr_flag) && (3==pstate) && (10==state_emr)) { // TRANSICAO 10->13
-			start_timer(&t_emr, emr);
+			time=emr;
+			tc1_init();
+			sei();
 			state_emr=13;
 		}
 
 		// ESTE-OESTE
 		if ((1==emr_flag) && ((4==pstate) || (5==pstate)) && (10==state_emr)) { // TRANSICAO 10->12
-			if (4==pstate)
-				start_timer(&t_short, curto); // se vier do verde liga t_short; se vier do amarelo nao
+			if (4==pstate) {
+				time=curto;
+				tc1_init();
+				sei(); }// se vier do verde liga t_short; se vier do amarelo nao
 			state_emr=12;
 		}
 
-		if ((12==state_emr) && (get_timer(&t_short))) { // TRANSICAO 12->14
-			start_timer(&t_emr, emr);
+		if ((12==state_emr) && (0==time)) { // TRANSICAO 12->14
+			time=emr;
+			tc1_init();
+			sei();
 			state_emr=14;
 		}
 
-		if ((14==state_emr) && (get_timer(&t_emr))) { // TRANSICAO 14->10
+		if ((14==state_emr) && (0==time)) { // TRANSICAO 14->10
 			state_emr=10;
 			state=1;
 			pstate=1;
 			emr_flag=0; // transicao de saida do estado de emergencia
-			start_timer(&t_long, longo);
+			time=longo;
+			tc1_init();
+			sei();
 		}
 
 		if ((1==emr_flag) && (6==pstate) && (10==state_emr)) { // TRANSICAO 10->14
-			start_timer(&t_emr, emr);
+			time=emr;
+			tc1_init();
+			sei();
 			state_emr=14;
 		}
 	}
